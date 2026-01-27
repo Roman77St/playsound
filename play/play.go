@@ -31,14 +31,10 @@ type decodedStream interface {
 
 // wavWrapper адаптирует библиотеку youpy/go-wav под наш интерфейс
 type wavWrapper struct {
-	io.Reader
+	io.ReadSeeker
 	sampleRate int
 }
 
-
-func (w *wavWrapper) Seek(offset int64, whence int) (int64, error) {
-	return 0, nil
-}
 func (w *wavWrapper) SampleRate() int { return w.sampleRate }
 
 // getDecoder  логика выбора формата
@@ -143,4 +139,74 @@ func PlaySound(filePath string) (chan struct{}, error) {
 	}()
 
 	return done, nil
+}
+
+type PlayParams struct {
+	Volume float64
+	Loop   bool
+}
+
+func PlaySoundWithParams(filePath string, params PlayParams) (chan struct{}, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	stream, err := getDecoder(f, filePath)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+
+	if err := initEngine(stream.SampleRate()); err != nil {
+		f.Close()
+		return nil, err
+	}
+
+	player := otoCtx.NewPlayer(stream)
+	player.SetVolume(params.Volume)
+	player.Play()
+
+	done := make(chan struct{})
+	mu.Lock()
+	ctx := rootCtx
+	mu.Unlock()
+
+	monitorPlayback(ctx, f, stream, player, done, params)
+	return done, nil
+}
+
+func monitorPlayback(ctx context.Context, f *os.File, stream decodedStream, player *oto.Player, done chan struct{}, params PlayParams) {
+	var closeOnce sync.Once
+	safeClose := func() {
+		closeOnce.Do(func() { close(done) })
+	}
+
+	go func() {
+		defer f.Close()
+		defer safeClose()
+
+		currentPlayer := player
+
+		for {
+			if !currentPlayer.IsPlaying() {
+				if params.Loop {
+					stream.Seek(0, io.SeekStart)
+					currentPlayer = otoCtx.NewPlayer(stream)
+					currentPlayer.SetVolume(params.Volume)
+					currentPlayer.Play()
+					time.Sleep(100 * time.Millisecond)
+				} else {
+					return
+				}
+			}
+			select {
+			case <-ctx.Done():
+				currentPlayer.Pause()
+				return
+			default:
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+	}()
 }
