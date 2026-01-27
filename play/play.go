@@ -50,6 +50,7 @@ func (w *wavWrapper) SampleRate() int { return w.sampleRate }
 type PlayParams struct {
 	Volume float64
 	Loop   bool
+	FadeOut bool
 }
 
 // getReadSeeker определяет источник аудио: локальный путь или URL.
@@ -148,6 +149,7 @@ func PlaySound(filePath string) (chan struct{}, error) {
 	return PlaySoundWithParams(filePath, PlayParams{
 		Volume: 1,
 		Loop: false,
+		FadeOut: true,
 	})
 }
 
@@ -223,6 +225,9 @@ func monitorPlayback(ctx context.Context, closer io.Closer, stream decodedStream
 			}
 			select {
 			case <-ctx.Done():                // Остановка по сигналу StopAll.
+				if params.FadeOut {
+					fadeOut(currentPlayer, params.Volume)
+				}
 				currentPlayer.Pause()
 				return
 			default:
@@ -230,4 +235,18 @@ func monitorPlayback(ctx context.Context, closer io.Closer, stream decodedStream
 			}
 		}
 	}()
+}
+
+// fadeOut постепенно снижает громкость плеера до нуля
+func fadeOut(player *oto.Player, startVolume float64) {
+	currentVol := startVolume
+	// Уменьшаем громкость шагами по 5% каждые 50мс (~1 секунда до тишины)
+	for currentVol > 0 {
+		currentVol -= 0.05
+		if currentVol < 0 {
+			currentVol = 0
+		}
+		player.SetVolume(currentVol)
+		time.Sleep(50 * time.Millisecond)
+	}
 }
