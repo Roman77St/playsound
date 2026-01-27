@@ -51,6 +51,7 @@ type PlayParams struct {
 	Volume float64
 	Loop   bool
 	FadeOut bool
+	FadeIn  bool
 }
 
 // getReadSeeker определяет источник аудио: локальный путь или URL.
@@ -178,7 +179,12 @@ func PlaySoundWithParams(filePath string, params PlayParams) (chan struct{}, err
 
 	// Шаг 4: Создаем и запускаем плеер.
 	player := otoCtx.NewPlayer(stream)
-	player.SetVolume(params.Volume)
+	// Если включен FadeIn, начинаем с нуля, иначе ставим целевую громкость сразу
+	if params.FadeIn {
+		go fadeIn(player, params.Volume)
+	} else {
+		player.SetVolume(params.Volume)
+	}
 	player.Play()
 
 	mu.Lock()
@@ -248,5 +254,21 @@ func fadeOut(player *oto.Player, startVolume float64) {
 		}
 		player.SetVolume(currentVol)
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// fadeIn постепенно поднимает громкость плеера до целевого значения
+func fadeIn(player *oto.Player, targetVolume float64) {
+	currentVol := 0.0
+	player.SetVolume(currentVol)
+
+	// Наращиваем громкость шагами по 0.01 каждые 30мс
+	for currentVol < targetVolume {
+		currentVol += 0.01
+		if currentVol > targetVolume {
+			currentVol = targetVolume
+		}
+		player.SetVolume(currentVol)
+		time.Sleep(30 * time.Millisecond)
 	}
 }
