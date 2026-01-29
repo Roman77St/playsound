@@ -17,13 +17,27 @@ import (
 	"github.com/youpy/go-wav"
 )
 
+type soundController struct {
+	cancel context.CancelFunc
+	player *oto.Player
+	params PlayParams
+}
+
+// PlayParams содержит настройки воспроизведения.
+type PlayParams struct {
+	Volume float64         // Громкость
+	Loop   bool            // Зацикливание трека
+	FadeOut bool           // Постепенное затухание звука
+	FadeIn  bool           // Постепенное увеличение громкости
+}
+
 var (
-	otoCtx *oto.Context
-	once sync.Once
+	otoCtx     *oto.Context
+	once       sync.Once
 	mu         sync.Mutex
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
-	activeSounds = make(map[chan struct{}]context.CancelFunc)
+	activeSounds = make(map[chan struct{}]soundController)
 	activeMu     sync.Mutex
 )
 
@@ -47,14 +61,6 @@ type wavWrapper struct {
 }
 
 func (w *wavWrapper) SampleRate() int { return w.sampleRate }
-
-// PlayParams содержит настройки воспроизведения: громкость и флаг зацикливания.
-type PlayParams struct {
-	Volume float64
-	Loop   bool
-	FadeOut bool
-	FadeIn  bool
-}
 
 // getReadSeeker определяет источник аудио: локальный путь или URL.
 // Если передан URL, файл скачивается в память целиком для обеспечения возможности Seek.
@@ -171,6 +177,19 @@ func PlaySoundWithParams(filePath string, params PlayParams) (chan struct{}, err
 
 	// Шаг 4: Создаем и запускаем плеер.
 	player := otoCtx.NewPlayer(stream)
+
+	mu.Lock()
+	soundCtx, soundCancel := context.WithCancel(rootCtx)
+	mu.Unlock()
+
+	activeMu.Lock()
+    activeSounds[done] = soundController{
+		cancel: soundCancel,
+		player: player,
+		params: params,
+	}
+	activeMu.Unlock()
+
 	// Если включен FadeIn, начинаем с нуля, иначе ставим целевую громкость сразу
 	if params.FadeIn {
 		go fadeIn(player, params.Volume)
@@ -179,13 +198,6 @@ func PlaySoundWithParams(filePath string, params PlayParams) (chan struct{}, err
 		}
 		player.Play()
 
-	mu.Lock()
-	soundCtx, soundCancel := context.WithCancel(rootCtx)
-	mu.Unlock()
-
-	activeMu.Lock()
-	activeSounds[done] = soundCancel
-	activeMu.Unlock()
 
 	// Шаг 5: Запускаем фоновый мониторинг состояния плеера.
 	monitorPlayback(soundCtx, closer, stream, player, done, params)
@@ -287,10 +299,37 @@ func StopAll() {
 // Stop останавливает конкретный звук по его каналу done
 func Stop(done chan struct{})  {
 	activeMu.Lock()
-	cancel, ok := activeSounds[done]
+	control, ok := activeSounds[done]
 	activeMu.Unlock()
 	if ok {
-		cancel()
+		control.cancel()
 	}
+}
 
+// SetVolume динамически меняет громкость уже играющего звука.
+// Возвращает ошибку, если звук не найден (уже завершился).
+func SetVolume(done chan struct{}, volume float64) error {
+    activeMu.Lock()
+    control, ok := activeSounds[done]
+    activeMu.Unlock()
+
+    if !ok {
+        return fmt.Errorf("sound already finished or not found")
+    }
+
+    control.player.SetVolume(volume)
+    return nil
+}
+
+// GetVolume возвращает текущую громкость звука.
+func GetVolume(done chan struct{}) (float64, error) {
+    activeMu.Lock()
+    control, ok := activeSounds[done]
+    activeMu.Unlock()
+
+    if !ok {
+        return 0, fmt.Errorf("sound already finished or not found")
+    }
+
+    return control.player.Volume(), nil
 }
