@@ -18,25 +18,27 @@ import (
 )
 
 type soundController struct {
-	cancel context.CancelFunc
-	player *oto.Player
-	params PlayParams
+	cancel     context.CancelFunc
+	player     *oto.Player
+	params     PlayParams
+	sampleRate int
 }
 
 // PlayParams содержит настройки воспроизведения.
 type PlayParams struct {
-	Volume float64         // Громкость
-	Loop   bool            // Зацикливание трека
-	FadeOut bool           // Постепенное затухание звука
-	FadeIn  bool           // Постепенное увеличение громкости
+	Volume   float64 // Громкость
+	Loop     bool    // Зацикливание трека
+	FadeOut  bool    // Постепенное затухание звука
+	FadeIn   bool    // Постепенное увеличение громкости
+	Position int     // С какой секунды начать
 }
 
 var (
-	otoCtx     *oto.Context
-	once       sync.Once
-	mu         sync.Mutex
-	rootCtx    context.Context
-	rootCancel context.CancelFunc
+	otoCtx       *oto.Context
+	once         sync.Once
+	mu           sync.Mutex
+	rootCtx      context.Context
+	rootCancel   context.CancelFunc
 	activeSounds = make(map[chan struct{}]soundController)
 	activeMu     sync.Mutex
 )
@@ -50,8 +52,8 @@ type decodedStream interface {
 
 // readSeekerAt нужен специально для WAV-декодера, который требует метод ReadAt.
 type readSeekerAt interface {
-    io.ReadSeeker
-    io.ReaderAt
+	io.ReadSeeker
+	io.ReaderAt
 }
 
 // wavWrapper адаптирует результат работы библиотеки youpy/go-wav под наш интерфейс.
@@ -96,7 +98,6 @@ func getReadSeeker(path string) (io.ReadSeeker, io.Closer, error) {
 	return f, f, nil // os.File является и ReadSeeker, и Closer
 }
 
-
 // getDecoder выбирает подходящий декодер (MP3 или WAV) на основе содержимого потока.
 func getDecoder(rs io.ReadSeeker, path string) (decodedStream, error) {
 	// 1. Пробуем декодировать как MP3.
@@ -111,13 +112,13 @@ func getDecoder(rs io.ReadSeeker, path string) (decodedStream, error) {
 	// 2. Пробуем декодировать как WAV.
 	// Проверяем, поддерживает ли поток метод ReadAt (необходим для WAV).
 	if rsa, ok := rs.(readSeekerAt); ok {
-        d := wav.NewReader(rsa) // Теперь здесь не будет ошибки компиляции
-        finfo, err := d.Format()
-        if err == nil {
-            rsa.Seek(0, io.SeekStart)
-            return &wavWrapper{rsa, int(finfo.SampleRate)}, nil
-        }
-    }
+		d := wav.NewReader(rsa) // Теперь здесь не будет ошибки компиляции
+		finfo, err := d.Format()
+		if err == nil {
+			rsa.Seek(0, io.SeekStart)
+			return &wavWrapper{rsa, int(finfo.SampleRate)}, nil
+		}
+	}
 
 	// 3. Если ничего не помогло, смотрим на расширение для вывода ошибки
 	ext := strings.ToLower(filepath.Ext(path))
@@ -130,11 +131,11 @@ func initEngine(sampleRate int) error {
 	once.Do(func() {
 		rootCtx, rootCancel = context.WithCancel(context.Background())
 		op := &oto.NewContextOptions{
-			SampleRate: sampleRate,
+			SampleRate:   sampleRate,
 			ChannelCount: 2,
-			Format: oto.FormatSignedInt16LE,
+			Format:       oto.FormatSignedInt16LE,
 		}
-		var readyChan chan struct {}
+		var readyChan chan struct{}
 		otoCtx, readyChan, err = oto.NewContext(op)
 		if err == nil {
 			<-readyChan
@@ -146,16 +147,14 @@ func initEngine(sampleRate int) error {
 // PlaySound — упрощенная функция для разового проигрывания на полной громкости.
 func PlaySound(filePath string) (chan struct{}, error) {
 	return PlaySoundWithParams(filePath, PlayParams{
-		Volume: 1,
-		Loop: false,
+		Volume:  1,
+		Loop:    false,
 		FadeOut: true,
 	})
 }
 
 // PlaySoundWithParams основная функция для запуска аудио с параметрами.
 func PlaySoundWithParams(filePath string, params PlayParams) (chan struct{}, error) {
-	done := make(chan struct{})
-
 	// Шаг 1: Получаем доступ к данным (файл или сеть).
 	rs, closer, err := getReadSeeker(filePath)
 	if err != nil {
@@ -178,26 +177,42 @@ func PlaySoundWithParams(filePath string, params PlayParams) (chan struct{}, err
 	// Шаг 4: Создаем и запускаем плеер.
 	player := otoCtx.NewPlayer(stream)
 
+
+	// Если включен FadeIn, начинаем с нуля, иначе ставим целевую громкость сразу
+    startVol := params.Volume
+    if params.FadeIn {
+        startVol = 0
+    }
+    player.SetVolume(startVol)
+
+	// Если указана стартовая позиция — перематываем плеер
+	if params.Position > 0 {
+		offset := secondsToBytes(params.Position, stream.SampleRate())
+		_, err = player.Seek(offset, io.SeekStart)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	mu.Lock()
 	soundCtx, soundCancel := context.WithCancel(rootCtx)
 	mu.Unlock()
 
+	done := make(chan struct{})
 	activeMu.Lock()
-    activeSounds[done] = soundController{
-		cancel: soundCancel,
-		player: player,
-		params: params,
+	activeSounds[done] = soundController{
+		cancel:     soundCancel,
+		player:     player,
+		params:     params,
+		sampleRate: stream.SampleRate(),
 	}
 	activeMu.Unlock()
 
-	// Если включен FadeIn, начинаем с нуля, иначе ставим целевую громкость сразу
-	if params.FadeIn {
-		go fadeIn(player, params.Volume)
-		} else {
-			player.SetVolume(params.Volume)
-		}
-		player.Play()
+	player.Play()
 
+	if params.FadeIn {
+        go fadeIn(player, params.Volume)
+    }
 
 	// Шаг 5: Запускаем фоновый мониторинг состояния плеера.
 	monitorPlayback(soundCtx, closer, stream, player, done, params)
@@ -213,7 +228,7 @@ func monitorPlayback(ctx context.Context, closer io.Closer, stream decodedStream
 
 	go func() {
 		// Гарантируем закрытие файлов и каналов при выходе из функции.
-		defer func ()  {
+		defer func() {
 			activeMu.Lock()
 			delete(activeSounds, done)
 			activeMu.Unlock()
@@ -238,14 +253,14 @@ func monitorPlayback(ctx context.Context, closer io.Closer, stream decodedStream
 					currentPlayer.Play()
 					// Защита от слишком частого перезапуска.
 					time.Sleep(100 * time.Millisecond)
-					} else {
-						return
-					}
+				} else {
+					return
 				}
+			}
 			select {
-				case <-ctx.Done():                // Остановка по сигналу StopAll.
+			case <-ctx.Done(): // Остановка по сигналу StopAll.
 				if params.FadeOut {
-					fadeOut(currentPlayer, params.Volume)
+					fadeOut(currentPlayer)
 				}
 				currentPlayer.Pause()
 				return
@@ -253,37 +268,47 @@ func monitorPlayback(ctx context.Context, closer io.Closer, stream decodedStream
 				time.Sleep(50 * time.Millisecond)
 			}
 		}
-		}()
-	}
+	}()
+}
 
-	// fadeIn постепенно поднимает громкость плеера до целевого значения
-	func fadeIn(player *oto.Player, targetVolume float64) {
-		currentVol := 0.0
-		player.SetVolume(currentVol)
-
-		// Наращиваем громкость шагами по 0.01 каждые 30мс
-		for currentVol < targetVolume {
-		currentVol += 0.01
-		if currentVol > targetVolume {
-			currentVol = targetVolume
-		}
-		player.SetVolume(currentVol)
-		time.Sleep(30 * time.Millisecond)
-	}
+// fadeIn постепенно поднимает громкость плеера до целевого значения
+func fadeIn(player *oto.Player, targetVolume float64) {
+    step := 0.02
+    for v := 0.0; v <= targetVolume; v += step {
+		if player.Volume() > v + step {
+            return
+        }
+        player.SetVolume(v)
+        time.Sleep(30 * time.Millisecond)
+    }
+    player.SetVolume(targetVolume)
 }
 
 // fadeOut постепенно снижает громкость плеера до нуля
-func fadeOut(player *oto.Player, startVolume float64) {
-	currentVol := startVolume
-	// Уменьшаем громкость шагами по 5% каждые 50мс (~1 секунда до тишины)
-	for currentVol > 0 {
-		currentVol -= 0.05
-		if currentVol < 0 {
-			currentVol = 0
-		}
-		player.SetVolume(currentVol)
-		time.Sleep(50 * time.Millisecond)
-	}
+func fadeOut(player *oto.Player) {
+    currentVol := player.Volume()
+    if currentVol <= 0 {
+        return
+    }
+
+    // Рассчитываем шаг так, чтобы всегда было 20 итераций.
+    // Если громкость 0.1, шаг будет 0.005. Если 1.0, шаг будет 0.05.
+    step := currentVol / 20.0
+
+    for range 20 {
+        currentVol -= step
+        if currentVol < 0 {
+            currentVol = 0
+        }
+        player.SetVolume(currentVol)
+        time.Sleep(50 * time.Millisecond)
+
+        if currentVol <= 0 {
+            break
+        }
+    }
+    // На всякий случай фиксируем чистый ноль в конце
+    player.SetVolume(0)
 }
 
 // StopAll мгновенно останавливает все проигрываемые в данный момент звуки.
@@ -297,7 +322,7 @@ func StopAll() {
 }
 
 // Stop останавливает конкретный звук по его каналу done
-func Stop(done chan struct{})  {
+func Stop(done chan struct{}) {
 	activeMu.Lock()
 	control, ok := activeSounds[done]
 	activeMu.Unlock()
@@ -309,27 +334,71 @@ func Stop(done chan struct{})  {
 // SetVolume динамически меняет громкость уже играющего звука.
 // Возвращает ошибку, если звук не найден (уже завершился).
 func SetVolume(done chan struct{}, volume float64) error {
-    activeMu.Lock()
-    control, ok := activeSounds[done]
-    activeMu.Unlock()
+	activeMu.Lock()
+	control, ok := activeSounds[done]
+	activeMu.Unlock()
 
-    if !ok {
-        return fmt.Errorf("sound already finished or not found")
-    }
+	if !ok {
+		return fmt.Errorf("sound already finished or not found")
+	}
 
-    control.player.SetVolume(volume)
-    return nil
+	control.player.SetVolume(volume)
+	return nil
 }
 
 // GetVolume возвращает текущую громкость звука.
 func GetVolume(done chan struct{}) (float64, error) {
-    activeMu.Lock()
-    control, ok := activeSounds[done]
-    activeMu.Unlock()
+	activeMu.Lock()
+	control, ok := activeSounds[done]
+	activeMu.Unlock()
 
-    if !ok {
-        return 0, fmt.Errorf("sound already finished or not found")
-    }
+	if !ok {
+		return 0, fmt.Errorf("sound already finished or not found")
+	}
 
-    return control.player.Volume(), nil
+	return control.player.Volume(), nil
+}
+
+func secondsToBytes(seconds, sampleRate int) int64 {
+	// 4 байта = 2 канала * 2 байта на семпл (int16)
+	return int64(seconds) * int64(sampleRate) * 4
+}
+
+func bytesToSeconds(b int64, sampleRate int) int {
+	if sampleRate <= 0 {
+		return 0
+	}
+	return int(b / int64(sampleRate*4))
+}
+
+func GetPosition(done chan struct{}) (int, error) {
+	activeMu.Lock()
+	control, ok := activeSounds[done]
+	activeMu.Unlock()
+
+	if !ok {
+		return 0, fmt.Errorf("sound not found")
+	}
+
+	// Seek(0, SeekCurrent) возвращает текущую позицию в байтах
+	pos, err := control.player.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, err
+	}
+
+	return bytesToSeconds(pos, control.sampleRate), nil
+}
+
+// Перемотка запущенного трека.
+func Seek(done chan struct{}, seconds int) error {
+	activeMu.Lock()
+	ctrl, ok := activeSounds[done]
+	activeMu.Unlock()
+
+	if !ok {
+		return fmt.Errorf("звук не найден")
+	}
+
+	_, err := ctrl.player.Seek(secondsToBytes(seconds, ctrl.sampleRate), io.SeekStart)
+	return err
 }
