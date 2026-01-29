@@ -23,6 +23,8 @@ var (
 	mu         sync.Mutex
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
+	activeSounds = make(map[chan struct{}]context.CancelFunc)
+	activeMu     sync.Mutex
 )
 
 // decodedStream объединяет возможности чтения и получения частоты дискретизации.
@@ -135,16 +137,6 @@ func initEngine(sampleRate int) error {
 	return err
 }
 
-// StopAll мгновенно останавливает все проигрываемые в данный момент звуки.
-func StopAll() {
-	mu.Lock()
-	defer mu.Unlock()
-	if rootCancel != nil {
-		rootCancel()
-		rootCtx, rootCancel = context.WithCancel(context.Background())
-	}
-}
-
 // PlaySound — упрощенная функция для разового проигрывания на полной громкости.
 func PlaySound(filePath string) (chan struct{}, error) {
 	return PlaySoundWithParams(filePath, PlayParams{
@@ -182,17 +174,21 @@ func PlaySoundWithParams(filePath string, params PlayParams) (chan struct{}, err
 	// Если включен FadeIn, начинаем с нуля, иначе ставим целевую громкость сразу
 	if params.FadeIn {
 		go fadeIn(player, params.Volume)
-	} else {
-		player.SetVolume(params.Volume)
-	}
-	player.Play()
+		} else {
+			player.SetVolume(params.Volume)
+		}
+		player.Play()
 
 	mu.Lock()
-	ctx := rootCtx
+	soundCtx, soundCancel := context.WithCancel(rootCtx)
 	mu.Unlock()
 
+	activeMu.Lock()
+	activeSounds[done] = soundCancel
+	activeMu.Unlock()
+
 	// Шаг 5: Запускаем фоновый мониторинг состояния плеера.
-	monitorPlayback(ctx, closer, stream, player, done, params)
+	monitorPlayback(soundCtx, closer, stream, player, done, params)
 	return done, nil
 }
 
@@ -205,8 +201,13 @@ func monitorPlayback(ctx context.Context, closer io.Closer, stream decodedStream
 
 	go func() {
 		// Гарантируем закрытие файлов и каналов при выходе из функции.
-		defer closer.Close()
-		defer safeClose()
+		defer func ()  {
+			activeMu.Lock()
+			delete(activeSounds, done)
+			activeMu.Unlock()
+			closer.Close()
+			safeClose()
+		}()
 
 		currentPlayer := player
 
@@ -225,12 +226,12 @@ func monitorPlayback(ctx context.Context, closer io.Closer, stream decodedStream
 					currentPlayer.Play()
 					// Защита от слишком частого перезапуска.
 					time.Sleep(100 * time.Millisecond)
-				} else {
-					return
+					} else {
+						return
+					}
 				}
-			}
 			select {
-			case <-ctx.Done():                // Остановка по сигналу StopAll.
+				case <-ctx.Done():                // Остановка по сигналу StopAll.
 				if params.FadeOut {
 					fadeOut(currentPlayer, params.Volume)
 				}
@@ -240,7 +241,23 @@ func monitorPlayback(ctx context.Context, closer io.Closer, stream decodedStream
 				time.Sleep(50 * time.Millisecond)
 			}
 		}
-	}()
+		}()
+	}
+
+	// fadeIn постепенно поднимает громкость плеера до целевого значения
+	func fadeIn(player *oto.Player, targetVolume float64) {
+		currentVol := 0.0
+		player.SetVolume(currentVol)
+
+		// Наращиваем громкость шагами по 0.01 каждые 30мс
+		for currentVol < targetVolume {
+		currentVol += 0.01
+		if currentVol > targetVolume {
+			currentVol = targetVolume
+		}
+		player.SetVolume(currentVol)
+		time.Sleep(30 * time.Millisecond)
+	}
 }
 
 // fadeOut постепенно снижает громкость плеера до нуля
@@ -257,18 +274,23 @@ func fadeOut(player *oto.Player, startVolume float64) {
 	}
 }
 
-// fadeIn постепенно поднимает громкость плеера до целевого значения
-func fadeIn(player *oto.Player, targetVolume float64) {
-	currentVol := 0.0
-	player.SetVolume(currentVol)
-
-	// Наращиваем громкость шагами по 0.01 каждые 30мс
-	for currentVol < targetVolume {
-		currentVol += 0.01
-		if currentVol > targetVolume {
-			currentVol = targetVolume
-		}
-		player.SetVolume(currentVol)
-		time.Sleep(30 * time.Millisecond)
+// StopAll мгновенно останавливает все проигрываемые в данный момент звуки.
+func StopAll() {
+	mu.Lock()
+	defer mu.Unlock()
+	if rootCancel != nil {
+		rootCancel()
+		rootCtx, rootCancel = context.WithCancel(context.Background())
 	}
+}
+
+// Stop останавливает конкретный звук по его каналу done
+func Stop(done chan struct{})  {
+	activeMu.Lock()
+	cancel, ok := activeSounds[done]
+	activeMu.Unlock()
+	if ok {
+		cancel()
+	}
+
 }
