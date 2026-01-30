@@ -22,6 +22,7 @@ type soundController struct {
 	player     *oto.Player
 	params     PlayParams
 	sampleRate int
+	isPaused bool
 }
 
 // PlayParams содержит настройки воспроизведения.
@@ -239,8 +240,13 @@ func monitorPlayback(ctx context.Context, closer io.Closer, stream decodedStream
 		currentPlayer := player
 
 		for {
+			activeMu.Lock()
+            currentSound, exists := activeSounds[done]
+            activeMu.Unlock()
+
+            if !exists { return }
 			// Если музыка перестала играть (дошла до конца).
-			if !currentPlayer.IsPlaying() {
+			if !currentPlayer.IsPlaying() && !currentSound.isPaused {
 				if params.Loop {
 					// Перематываем поток в начало.
 					_, err := stream.Seek(0, io.SeekStart)
@@ -252,7 +258,7 @@ func monitorPlayback(ctx context.Context, closer io.Closer, stream decodedStream
 					currentPlayer.SetVolume(params.Volume)
 					currentPlayer.Play()
 					// Защита от слишком частого перезапуска.
-					time.Sleep(100 * time.Millisecond)
+					time.Sleep(200 * time.Millisecond)
 				} else {
 					return
 				}
@@ -401,4 +407,36 @@ func Seek(done chan struct{}, seconds int) error {
 
 	_, err := ctrl.player.Seek(secondsToBytes(seconds, ctrl.sampleRate), io.SeekStart)
 	return err
+}
+
+// Pause приостанавливает воспроизведение
+func Pause(done chan struct{}) error {
+	activeMu.Lock()
+	defer activeMu.Unlock()
+
+	control, ok := activeSounds[done]
+	if !ok {
+		return fmt.Errorf("sound not found")
+	}
+
+	control.player.Pause()
+	control.isPaused = true
+	activeSounds[done] = control
+	return nil
+}
+
+// Resume возобновляет приостановленное воспроизведение
+func PlayOn(done chan struct{}) error {
+	activeMu.Lock()
+	defer activeMu.Unlock()
+
+	control, ok := activeSounds[done]
+	if !ok {
+		return fmt.Errorf("sound not found")
+	}
+
+	control.player.Play()
+	control.isPaused = false
+    activeSounds[done] = control
+	return nil
 }
