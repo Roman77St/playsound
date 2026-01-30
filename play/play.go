@@ -412,30 +412,54 @@ func Seek(done chan struct{}, seconds int) error {
 // Pause приостанавливает воспроизведение
 func Pause(done chan struct{}) error {
 	activeMu.Lock()
-	defer activeMu.Unlock()
-
 	control, ok := activeSounds[done]
+	activeMu.Unlock()
+
 	if !ok {
 		return fmt.Errorf("sound not found")
 	}
 
+	if control.params.FadeOut {
+		fadeOut(control.player)
+	}
+
 	control.player.Pause()
+	activeMu.Lock()
 	control.isPaused = true
 	activeSounds[done] = control
+	activeMu.Unlock()
 	return nil
 }
 
 // Resume возобновляет приостановленное воспроизведение
 func PlayOn(done chan struct{}) error {
 	activeMu.Lock()
-	defer activeMu.Unlock()
-
 	control, ok := activeSounds[done]
+	activeMu.Unlock()
+
 	if !ok {
 		return fmt.Errorf("sound not found")
 	}
 
+	targetVol := control.params.Volume
+	if control.params.FadeIn {
+			control.player.SetVolume(0)
+		} else {
+			control.player.SetVolume(targetVol)
+	}
+
 	control.player.Play()
+
+	// Снимаем флаг паузы ДО запуска горутины, чтобы мониторинг не закрыл трек
+    activeMu.Lock()
+    control.isPaused = false
+    activeSounds[done] = control
+    activeMu.Unlock()
+
+	if control.params.FadeIn {
+		go fadeIn(control.player, control.params.Volume)
+	}
+
 	control.isPaused = false
     activeSounds[done] = control
 	return nil
