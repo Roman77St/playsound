@@ -44,9 +44,9 @@ func monitorPlayback(ctx context.Context, closer io.Closer, stream decodedStream
 					if err != nil {
 						return
 					}
-					// Создаем новый плеер для "чистого" перезапуска.
-					currentPlayer = otoCtx.NewPlayer(stream)
-					currentPlayer.SetVolume(params.Volume)
+					// // Создаем новый плеер для "чистого" перезапуска.
+					// currentPlayer = otoCtx.NewPlayer(stream)
+					// currentPlayer.SetVolume(params.Volume)
 					currentPlayer.Play()
 					// Защита от слишком частого перезапуска.
 					time.Sleep(200 * time.Millisecond)
@@ -61,8 +61,7 @@ func monitorPlayback(ctx context.Context, closer io.Closer, stream decodedStream
 				}
 				currentPlayer.Pause()
 				return
-			default:
-				time.Sleep(50 * time.Millisecond)
+			case <-time.After(100 * time.Millisecond):
 			}
 		}
 	}()

@@ -47,6 +47,10 @@ func PlaySoundWithParams(filePath string, params PlayParams) (chan struct{}, err
 	// Шаг 4: Создаем и запускаем плеер.
 	player := otoCtx.NewPlayer(stream)
 
+	if params.Volume <= 0 {
+        params.Volume = 1.0
+    }
+
 	// Если включен FadeIn, начинаем с нуля, иначе ставим целевую громкость сразу
 	startVol := params.Volume
 	if params.FadeIn {
