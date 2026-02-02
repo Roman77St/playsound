@@ -1,4 +1,5 @@
-package play
+package playsound
+
 
 import (
 	"fmt"
@@ -72,9 +73,10 @@ func (t *tempFileCloser) Close() error {
 	err := os.Remove(filePath)
     if err != nil {
         // Если всё равно не удалилось, выведем в консоль причину
-        fmt.Printf("[Debug] Не удалось удалить временный файл %s: %v\n", filePath, err)
+        err = fmt.Errorf("[Debug] Не удалось удалить временный файл %s: %v", filePath, err)
+		return err
     }
-    return err
+    return nil
 }
 
 // getDecoder выбирает подходящий декодер (MP3 или WAV) на основе содержимого потока.

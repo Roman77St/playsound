@@ -1,4 +1,5 @@
-package play
+package playsound
+
 
 import (
 	"context"
