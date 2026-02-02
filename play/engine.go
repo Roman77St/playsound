@@ -8,12 +8,22 @@ import (
 	"github.com/ebitengine/oto/v3"
 )
 
+// soundController представляет собой активную сессию проигрывания звука.
+// Она хранит всё необходимое для динамического управления потоком.
 type soundController struct {
-	cancel     context.CancelFunc // Функция для принудительной остановки через контекст
-	player     *oto.Player        // Экземпляр плеера из библиотеки oto
-	params     PlayParams         // Копия параметров, с которыми был запущен звук
-	sampleRate int                // Частота дискретизации (нужна для расчета позиций/секунд)
-	isPaused   bool               // Флаг, предотвращающий закрытие потока мониторингом во время паузы
+	cancel     context.CancelFunc // Функция для немедленной остановки горутины мониторинга и очистки ресурсов.
+	player     *oto.Player        // ЭПрямой доступ к аудио-плееру Oto для изменения громкости и паузы.
+	params     PlayParams         // Настройки, переданные при старте (нужны для Loop и Fade эффектов).
+	sampleRate int                // Частота дискретизации, используется для конвертации байтов в секунды.
+	isPaused   bool               // Флаг состояния паузы. Если true, мониторинг игнорирует отсутствие воспроизведения.
+}
+
+// updateStatus безопасно обновляет флаг паузы в карте активных звуков.
+func (sc *soundController) updateStatus(done chan struct{}, paused bool) {
+	activeMu.Lock()
+	defer activeMu.Unlock()
+	sc.isPaused = paused
+	activeSounds[done] = *sc
 }
 
 // decodedStream объединяет возможности чтения и получения частоты дискретизации.

@@ -89,10 +89,7 @@ func Pause(done chan struct{}) error {
 	}
 
 	control.player.Pause()
-	activeMu.Lock()
-	control.isPaused = true
-	activeSounds[done] = control
-	activeMu.Unlock()
+	control.updateStatus(done, true)
 	return nil
 }
 
@@ -115,10 +112,7 @@ func PlayOn(done chan struct{}) error {
 	control.player.Play()
 
 	// Снимаем флаг паузы до запуска горутины, чтобы мониторинг не закрыл трек
-	activeMu.Lock()
-	control.isPaused = false
-	activeSounds[done] = control
-	activeMu.Unlock()
+	control.updateStatus(done, false)
 
 	if control.params.FadeIn {
 		go fadeIn(control.player, control.params.Volume)
