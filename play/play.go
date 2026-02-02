@@ -25,6 +25,8 @@ func PlaySound(filePath string) (chan struct{}, error) {
 
 // PlaySoundWithParams основная функция для запуска аудио с параметрами.
 func PlaySoundWithParams(filePath string, params PlayParams) (chan struct{}, error) {
+	params = validateParams(params)
+
 	// Шаг 1: Получаем доступ к данным (файл или сеть).
 	rs, closer, err := getReadSeeker(filePath)
 	if err != nil {

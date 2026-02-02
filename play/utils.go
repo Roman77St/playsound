@@ -15,3 +15,18 @@ func bytesToSeconds(b int64, sampleRate int) int {
 	}
 	return int(b / int64(sampleRate*4))
 }
+
+// validateParams проверяет и корректирует параметры перед запуском.
+func validateParams(p PlayParams) PlayParams {
+	// Если громкость не указана, ставим 1.0 (100%)
+	if p.Volume <= 0 || p.Volume > 1 {
+		p.Volume = 1.0
+	}
+
+	// Позиция не может быть отрицательной
+	if p.Position < 0 {
+		p.Position = 0
+	}
+
+	return p
+}
