@@ -49,6 +49,7 @@ type wavWrapper struct {
 func initEngine(sampleRate int) error {
 	var err error
 	once.Do(func() {
+		CleanUpTempFiles()
 		rootCtx, rootCancel = context.WithCancel(context.Background())
 		op := &oto.NewContextOptions{
 			SampleRate:   sampleRate,

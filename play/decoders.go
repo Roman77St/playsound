@@ -1,13 +1,13 @@
 package play
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/hajimehoshi/go-mp3"
 	"github.com/youpy/go-wav"
@@ -27,16 +27,26 @@ func getReadSeeker(path string) (io.ReadSeeker, io.Closer, error) {
 			return nil, nil, fmt.Errorf("http error: %s", resp.Status)
 		}
 
-		// Читаем все данные в оперативную память.
-		data, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		// Создаем временный файл
+		tempFile, err := os.CreateTemp("", "audio-track-*.tmp")
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("ошибка создания temp-файла: %v", err)
 		}
 
-		// bytes.NewReader реализует ReadSeeker и ReaderAt.
-		// Использование io.NopCloser(nil) безопасно, так как буфер в памяти не требует закрытия.
-		return bytes.NewReader(data), io.NopCloser(nil), nil
+		// Копируем данные из сети в файл
+		_, err = io.Copy(tempFile, resp.Body)
+		if err != nil {
+			tempFile.Close()
+			os.Remove(tempFile.Name())
+			return nil, nil, fmt.Errorf("ошибка загрузки трека: %v", err)
+		}
+
+		// Возвращаемся в начало файла для чтения декодером
+		tempFile.Seek(0, io.SeekStart)
+
+		// Возвращаем специальную обертку,
+		// чтобы при закрытии файл удалялся автоматически
+		return tempFile, &tempFileCloser{tempFile}, nil
 	}
 
 	// Для локального файла возвращаем сам дескриптор файла.
@@ -45,6 +55,26 @@ func getReadSeeker(path string) (io.ReadSeeker, io.Closer, error) {
 		return nil, nil, err
 	}
 	return f, f, nil // os.File является и ReadSeeker, и Closer
+}
+
+// tempFileCloser нужен, чтобы удалить файл с диска после проигрывания
+type tempFileCloser struct {
+	f *os.File
+}
+
+func (t *tempFileCloser) Close() error {
+	filePath := t.f.Name()
+	t.f.Close()
+
+	time.Sleep(10 * time.Millisecond)
+
+
+	err := os.Remove(filePath)
+    if err != nil {
+        // Если всё равно не удалилось, выведем в консоль причину
+        fmt.Printf("[Debug] Не удалось удалить временный файл %s: %v\n", filePath, err)
+    }
+    return err
 }
 
 // getDecoder выбирает подходящий декодер (MP3 или WAV) на основе содержимого потока.
@@ -72,4 +102,22 @@ func getDecoder(rs io.ReadSeeker, path string) (decodedStream, error) {
 	// 3. Если ничего не помогло, смотрим на расширение для вывода ошибки
 	ext := strings.ToLower(filepath.Ext(path))
 	return nil, fmt.Errorf("file content doesn't match extension or format is unsupported: %s", ext)
+}
+
+
+// Удаляем временные файлы, ранее созданные нашей программой
+func CleanUpTempFiles() {
+	tempDir := os.TempDir()
+	files, err := os.ReadDir(tempDir)
+	if err != nil {
+		return
+	}
+
+	for _, file := range files {
+		// Ищем файлы, созданные нашей библиотекой
+		if !file.IsDir() && strings.HasPrefix(file.Name(), "audio-track-") && strings.HasSuffix(file.Name(), ".tmp") {
+			fullPath := filepath.Join(tempDir, file.Name())
+			_ = os.Remove(fullPath)
+		}
+	}
 }
