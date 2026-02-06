@@ -6,17 +6,17 @@ import (
 
 // secondsToBytes рассчитывает размер аудио-данных в байтах на основе длительности.
 // Формула: секунды * частота дискретизации * 4 (2 канала по 2 байта на семпл).
-func secondsToBytes(seconds, sampleRate int) int64 {
+func secondsToBytes(seconds float64, sampleRate int) int64 {
 	// 4 байта = 2 канала * 2 байта на семпл (int16)
-	return int64(seconds) * int64(sampleRate) * 4
+	return int64(seconds * float64(sampleRate) * 4)
 }
 
 // bytesToSeconds переводит объем данных в байтах в секунды.
-func bytesToSeconds(b int64, sampleRate int) int {
+func bytesToSeconds(b int64, sampleRate int) float64 {
 	if sampleRate <= 0 {
 		return 0
 	}
-	return int(b / int64(sampleRate*4))
+	return float64(b) / float64(sampleRate * 4)
 }
 
 // validateParams проверяет и корректирует параметры перед запуском.
@@ -37,7 +37,7 @@ func validateParams(p PlayParams) PlayParams {
 }
 
 // GetDuration возвращает общую длительность трека в секундах.
-func GetDuration(done chan struct{}) (int, error) {
+func GetDuration(done chan struct{}) (float64, error) {
 	control, ok := getControl(done)
 	if !ok {
 		return 0, fmt.Errorf("sound not found")

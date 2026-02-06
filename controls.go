@@ -49,7 +49,7 @@ func GetVolume(done chan struct{}) (float64, error) {
 }
 
 // Возвращает текущую позицию трека в секундах
-func GetPosition(done chan struct{}) (int, error) {
+func GetPosition(done chan struct{}) (float64, error) {
 	control, ok := getControl(done)
 
 	if !ok {
@@ -62,7 +62,7 @@ func GetPosition(done chan struct{}) (int, error) {
 }
 
 // Перемотка запущенного трека.
-func Seek(done chan struct{}, seconds int) error {
+func Seek(done chan struct{}, seconds float64) error {
 	control, ok := getControl(done)
 
 	if !ok {

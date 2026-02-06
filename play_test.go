@@ -25,7 +25,7 @@ func TestMain(m *testing.M) {
 // Тест перевода секунд в байты и обратно (utils.go)
 func TestConversion(t *testing.T) {
 	sampleRate := 44100
-	seconds := 5
+	seconds := 5.0
 
 	// Ожидаем: 5 * 44100 * 4 = 882000 байт
 	bytes := secondsToBytes(seconds, sampleRate)
@@ -37,7 +37,7 @@ func TestConversion(t *testing.T) {
 
 	resSeconds := bytesToSeconds(bytes, sampleRate)
 	if resSeconds != seconds {
-		t.Errorf("bytesToSeconds() = %d; want %d", resSeconds, seconds)
+		t.Errorf("bytesToSeconds() = %f; want %f", resSeconds, seconds)
 	}
 }
 
