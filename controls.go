@@ -48,6 +48,7 @@ func GetVolume(done chan struct{}) (float64, error) {
 	return control.player.Volume(), nil
 }
 
+// Возвращает текущую позицию трека в секундах
 func GetPosition(done chan struct{}) (int, error) {
 	control, ok := getControl(done)
 
@@ -55,11 +56,7 @@ func GetPosition(done chan struct{}) (int, error) {
 		return 0, fmt.Errorf("sound not found")
 	}
 
-	// Seek(0, SeekCurrent) возвращает текущую позицию в байтах
-	pos, err := control.player.Seek(0, io.SeekCurrent)
-	if err != nil {
-		return 0, err
-	}
+	pos := control.tracker.CurrentPos()
 
 	return bytesToSeconds(pos, control.sampleRate), nil
 }
@@ -72,7 +69,9 @@ func Seek(done chan struct{}, seconds int) error {
 		return fmt.Errorf("звук не найден")
 	}
 
-	_, err := control.player.Seek(secondsToBytes(seconds, control.sampleRate), io.SeekStart)
+	offset := secondsToBytes(seconds, control.sampleRate)
+
+	_, err := control.tracker.Seek(offset, io.SeekStart)
 	return err
 }
 

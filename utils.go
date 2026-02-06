@@ -2,7 +2,6 @@ package playsound
 
 import (
 	"fmt"
-	"io"
 )
 
 // secondsToBytes рассчитывает размер аудио-данных в байтах на основе длительности.
@@ -23,8 +22,10 @@ func bytesToSeconds(b int64, sampleRate int) int {
 // validateParams проверяет и корректирует параметры перед запуском.
 func validateParams(p PlayParams) PlayParams {
 	// Если громкость не указана, ставим 1.0 (100%)
-	if p.Volume <= 0 || p.Volume > 1 {
+	if p.Volume == 0 || p.Volume > 1 {
 		p.Volume = 1.0
+	} else if p.Volume <= 0 {
+		p.Volume = 0
 	}
 
 	// Позиция не может быть отрицательной
@@ -42,15 +43,9 @@ func GetDuration(done chan struct{}) (int, error) {
 		return 0, fmt.Errorf("sound not found")
 	}
 
-	// Для определения длины используем метод Seek плеера oto
-	// Переход в конец вернет позицию (размер в байтах)
-	currentPos, _ := control.player.Seek(0, io.SeekCurrent) // запомним где мы
-	totalBytes, err := control.player.Seek(0, io.SeekEnd)   // узнаем конец
-	control.player.Seek(currentPos, io.SeekStart)          // вернемся назад
-
-	if err != nil {
-		return 0, err
+	if control.totalBytes > 0 {
+		return bytesToSeconds(control.totalBytes, control.sampleRate), nil
 	}
 
-	return bytesToSeconds(totalBytes, control.sampleRate), nil
+	return 0, nil
 }

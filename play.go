@@ -8,7 +8,7 @@ import (
 
 // PlayParams содержит настройки воспроизведения.
 type PlayParams struct {
-	Volume   float64 // Громкость
+	Volume   float64 // Громкость NB! Тишина это -1, не 0!
 	Loop     bool    // Зацикливание трека
 	FadeOut  bool    // Постепенное затухание звука
 	FadeIn   bool    // Постепенное увеличение громкости
@@ -48,11 +48,8 @@ func PlaySoundWithParams(filePath string, params PlayParams) (chan struct{}, err
 	}
 
 	// Шаг 4: Создаем и запускаем плеер.
-	player := otoCtx.NewPlayer(stream)
-
-	if params.Volume <= 0 {
-        params.Volume = 1.0
-    }
+	tracker := &trackingStream{decodedStream: stream}
+	player := otoCtx.NewPlayer(tracker)
 
 	// Если включен FadeIn, начинаем с нуля, иначе ставим целевую громкость сразу
 	startVol := params.Volume
@@ -70,6 +67,13 @@ func PlaySoundWithParams(filePath string, params PlayParams) (chan struct{}, err
 		}
 	}
 
+	var tBytes int64
+    if l, ok := stream.(interface{ Length() int64 }); ok {
+        tBytes = l.Length()
+    } else if l, ok := stream.(interface{ Length() int }); ok {
+        tBytes = int64(l.Length())
+    }
+
 	mu.Lock()
 	soundCtx, soundCancel := context.WithCancel(rootCtx)
 	mu.Unlock()
@@ -81,6 +85,8 @@ func PlaySoundWithParams(filePath string, params PlayParams) (chan struct{}, err
 		player:     player,
 		params:     params,
 		sampleRate: stream.SampleRate(),
+		tracker:    tracker,
+		totalBytes: tBytes,
 	}
 	activeMu.Unlock()
 
