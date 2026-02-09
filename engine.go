@@ -108,21 +108,24 @@ type trackingStream struct {
 // Read считывает данные из декодера и обновляет счетчик прочитанных байт.
 // Вызывается автоматически плеером oto в процессе воспроизведения.
 func (ts *trackingStream) Read(p []byte) (n int, err error) {
-	n, err = ts.decodedStream.Read(p)
 	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	
+	n, err = ts.decodedStream.Read(p)
 	ts.currentPos += int64(n)
-	ts.mu.Unlock()
 	return n, err
 }
 
 // Seek изменяет позицию в декодере и синхронизирует внутренний счетчик.
 // Используется для ручной перемотки трека пользователем.
 func (ts *trackingStream) Seek(offset int64, whence int) (int64, error) {
-	newPos, err := ts.decodedStream.Seek(offset, whence)
+	ts.mu.Lock()
+    defer ts.mu.Unlock()
+
+	safeOffset := (offset / 4) * 4
+	newPos, err := ts.decodedStream.Seek(safeOffset, whence)
 	if err == nil {
-		ts.mu.Lock()
 		ts.currentPos = newPos
-		ts.mu.Unlock()
 	}
 	return newPos, err
 }
